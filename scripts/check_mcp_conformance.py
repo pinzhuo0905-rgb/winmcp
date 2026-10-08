@@ -35,9 +35,11 @@ def _exchange(messages: list[dict], args: list[str] | None = None) -> tuple[list
     that dies mid-batch can be diagnosed from the log alone.
     """
     payload = "\n".join(json.dumps(m) for m in messages) + "\n"
+    # Tool names must be passed after --tools, not as bare positionals.
+    serve_args = ["--tools", *args] if args else []
     try:
         proc = subprocess.run(
-            [sys.executable, "-m", "winmcp.cli", "serve", *(args or [])],
+            [sys.executable, "-m", "winmcp.cli", "serve", *serve_args],
             input=payload,
             capture_output=True,
             text=True,
@@ -134,8 +136,15 @@ def main() -> int:
     check("tools capability declared", "tools" in hs[1]["result"]["capabilities"])
 
     tools = hs[2]["result"]["tools"]
+    available = {t["name"] for t in tools}
     expected = len(args.tools) if args.tools else len(TOOL_NAMES)
     check(f"tools/list returns {expected} tools", len(tools) == expected, f"got {len(tools)}")
+    if args.tools:
+        check(
+            "whitelist is honoured exactly",
+            available == set(args.tools),
+            f"got {sorted(available)}",
+        )
     for t in tools:
         check(f"{t['name']}: schema is an object", t["inputSchema"].get("type") == "object")
         check(f"{t['name']}: has a description", bool(t.get("description")))
@@ -157,33 +166,45 @@ def main() -> int:
     check("unknown method uses code -32601", errs[5]["error"].get("code") == -32601)
 
     # --- a real tool call ---
+    # Pick something the server actually advertises: when --tools narrows the
+    # surface, a hard-coded tool name may not be there at all.
+    candidates = [n for n in ("DisplayInventory", "Snapshot", "Screenshot") if n in available]
+    candidates += sorted(n for n in available if n not in candidates)
+    if not candidates:
+        check("server advertises at least one tool", False, f"got {sorted(available)}")
+        return 1
+
+    exec_tool = candidates[0]
     calls = phase(
         "tool execution",
         [
             {"jsonrpc": "2.0", "id": 6, "method": "tools/call",
-             "params": {"name": "DisplayInventory", "arguments": {}}},
+             "params": {"name": exec_tool, "arguments": {}}},
         ],
         args.tools,
     )
     call = calls[6]["result"]
-    check("tools/call succeeds", call.get("isError") is False, str(call)[:200])
+    check(f"tools/call {exec_tool} succeeds", call.get("isError") is False, str(call)[:200])
     check("result carries text content", call["content"][0]["type"] == "text")
 
     # --- image content ---
-    imgs = phase(
-        "image content",
-        [
-            {"jsonrpc": "2.0", "id": 7, "method": "tools/call",
-             "params": {"name": "Screenshot", "arguments": {}}},
-        ],
-        args.tools,
-    )
-    blocks = imgs[7]["result"]["content"]
-    images = [b for b in blocks if b.get("type") == "image"]
-    check("Screenshot returns an image block", bool(images))
-    raw = base64.b64decode(images[0]["data"])
-    check("image payload is a PNG", raw[:8] == b"\x89PNG\r\n\x1a\n")
-    check("image mimeType is image/png", images[0]["mimeType"] == "image/png")
+    if "Screenshot" in available:
+        imgs = phase(
+            "image content",
+            [
+                {"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                 "params": {"name": "Screenshot", "arguments": {}}},
+            ],
+            args.tools,
+        )
+        blocks = imgs[7]["result"]["content"]
+        images = [b for b in blocks if b.get("type") == "image"]
+        check("Screenshot returns an image block", bool(images))
+        raw = base64.b64decode(images[0]["data"])
+        check("image payload is a PNG", raw[:8] == b"\x89PNG\r\n\x1a\n")
+        check("image mimeType is image/png", images[0]["mimeType"] == "image/png")
+    else:
+        print("\n[image content]\n  skipped — Screenshot is not in the advertised surface")
 
     print()
     print("-" * 60)
