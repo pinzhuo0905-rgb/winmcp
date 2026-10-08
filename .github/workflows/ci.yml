@@ -63,6 +63,7 @@ jobs:
           python -c "from winmcp.tools import build_registry, TOOL_NAMES; r = build_registry(); assert set(r.names()) == set(TOOL_NAMES), 'registry drift'; print('OK:', len(TOOL_NAMES), 'tools')"
         env:
           PYTHONPATH: src
+        shell: bash
 
   mcp-protocol:
     name: mcp protocol conformance
@@ -73,24 +74,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: Handshake and list tools over stdio
-        run: |
-          python - <<'EOF'
-          import json, subprocess, sys
-          msgs = [
-              {"jsonrpc": "2.0", "id": 1, "method": "initialize",
-               "params": {"protocolVersion": "2025-11-25", "capabilities": {},
-                          "clientInfo": {"name": "ci", "version": "1"}}},
-              {"jsonrpc": "2.0", "method": "notifications/initialized"},
-              {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
-          ]
-          payload = "\n".join(json.dumps(m) for m in msgs) + "\n"
-          out = subprocess.run([sys.executable, "-m", "winmcp.cli", "serve"],
-                               input=payload, capture_output=True, text=True).stdout
-          responses = [json.loads(l) for l in out.splitlines() if l.strip()]
-          assert responses[0]["result"]["serverInfo"]["name"] == "winmcp"
-          tools = responses[1]["result"]["tools"]
-          assert len(tools) == 18, f"expected 18 tools, got {len(tools)}"
-          print("MCP conformance OK:", len(tools), "tools")
-          EOF
+        run: python scripts/check_mcp_conformance.py
+        env:
+          PYTHONPATH: src
+
+      - name: Whitelist narrows the advertised surface
+        run: python scripts/check_mcp_conformance.py --tools Screenshot Click Type
         env:
           PYTHONPATH: src
