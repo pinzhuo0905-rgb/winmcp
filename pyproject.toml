@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "winmcp"
+version = "1.0.0"
+description = "Native, self-contained Windows desktop control: the full Windows-MCP capability surface implemented in-process with zero third-party dependencies, plus an MCP server and an intent-checked agent layer."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "winmcp contributors" }]
+keywords = ["windows", "mcp", "computer-use", "automation", "agent", "desktop"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: Win32 (MS Windows)",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: Microsoft :: Windows :: Windows 10",
+  "Operating System :: Microsoft :: Windows :: Windows 11",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Libraries",
+  "Topic :: System :: Systems Administration",
+]
+
+# 运行时零第三方依赖——全部用 ctypes + 标准库
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.5",
+]
+
+[project.scripts]
+winmcp = "winmcp.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/pinzhuo0905-rgb/winmcp"
+Issues = "https://github.com/pinzhuo0905-rgb/winmcp/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# 显式锁定规则集，避免 ruff 默认规则随版本漂移导致 CI 时红时绿
+select = ["E", "F", "W", "I", "UP", "RUF"]
+ignore = [
+  "E501",
+  "RUF001",
+  "RUF002",
+  "RUF003",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }} / py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    # windows-latest defaults stdout to a non-UTF-8 codepage; the test runner prints
+    # check marks, so pin UTF-8 for the whole job.
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]
+        python-version: ["3.10", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install (setuptools-free installer)
+        run: python scripts/install_local.py --no-path
+
+      - name: Import check
+        run: python -c "import winmcp; print('winmcp', winmcp.__version__, '-', len(winmcp.TOOL_NAMES), 'tools')"
+
+      - name: Run tests
+        run: python scripts/run_tests.py
+
+      - name: Verify the tool reference is current
+        run: python scripts/gen_tool_reference.py --check
+
+      - name: Smoke-test the CLI
+        run: |
+          python -m winmcp.cli info
+          python -m winmcp.cli plan "install this for me"
+          python -m winmcp.cli call DisplayInventory
+
+  lint:
+    name: lint
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - name: Lint
+        run: ruff check src tests scripts
+      - name: Check the registry matches the documented tool surface
+        run: |
+          python -c "from winmcp.tools import build_registry, TOOL_NAMES; r = build_registry(); assert set(r.names()) == set(TOOL_NAMES), 'registry drift'; print('OK:', len(TOOL_NAMES), 'tools')"
+        env:
+          PYTHONPATH: src
+
+  mcp-protocol:
+    name: mcp protocol conformance
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Handshake and list tools over stdio
+        run: |
+          python - <<'EOF'
+          import json, subprocess, sys
+          msgs = [
+              {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+               "params": {"protocolVersion": "2025-11-25", "capabilities": {},
+                          "clientInfo": {"name": "ci", "version": "1"}}},
+              {"jsonrpc": "2.0", "method": "notifications/initialized"},
+              {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+          ]
+          payload = "\n".join(json.dumps(m) for m in msgs) + "\n"
+          out = subprocess.run([sys.executable, "-m", "winmcp.cli", "serve"],
+                               input=payload, capture_output=True, text=True).stdout
+          responses = [json.loads(l) for l in out.splitlines() if l.strip()]
+          assert responses[0]["result"]["serverInfo"]["name"] == "winmcp"
+          tools = responses[1]["result"]["tools"]
+          assert len(tools) == 18, f"expected 18 tools, got {len(tools)}"
+          print("MCP conformance OK:", len(tools), "tools")
+          EOF
+        env:
+          PYTHONPATH: src
