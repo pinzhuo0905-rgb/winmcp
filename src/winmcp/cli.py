@@ -250,6 +250,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Windows consoles and pipes default to the ANSI code page. Tool output and
+    # error messages are not ASCII, so pin the streams to UTF-8 before anything
+    # is printed — including the MCP server's stdout, where a mis-encoded byte
+    # makes the whole response stream unreadable to the client.
+    from .server import force_utf8_stdio
+
+    force_utf8_stdio()
     args = build_parser().parse_args(argv)
     return int(args.func(args))
 

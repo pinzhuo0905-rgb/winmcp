@@ -28,7 +28,12 @@ class ConformanceError(AssertionError):
     pass
 
 
-def _exchange(messages: list[dict], args: list[str] | None = None) -> list[dict]:
+def _exchange(messages: list[dict], args: list[str] | None = None) -> tuple[list[dict], str, int]:
+    """Send a batch and return ``(responses, stderr, returncode)``.
+
+    The stderr and exit code are returned rather than discarded so that a server
+    that dies mid-batch can be diagnosed from the log alone.
+    """
     payload = "\n".join(json.dumps(m) for m in messages) + "\n"
     try:
         proc = subprocess.run(
@@ -63,7 +68,7 @@ def _exchange(messages: list[dict], args: list[str] | None = None) -> list[dict]
                 raise ConformanceError(
                     f"non-JSON on stdout: {line[:160]!r}\nstderr:\n{stderr[-2000:]}"
                 ) from exc
-    return out
+    return out, stderr, proc.returncode
 
 
 def check(label: str, condition: bool, detail: str = "") -> None:
@@ -91,15 +96,15 @@ def phase(name: str, messages: list[dict], args: list[str] | None) -> dict[int, 
     hard to attribute; a few small batches pinpoint which request went unanswered.
     """
     print(f"\n[{name}]")
-    responses = _exchange([INIT, READY, *messages], args)
+    responses, stderr, returncode = _exchange([INIT, READY, *messages], args)
     by_id = {r.get("id"): r for r in responses if r.get("id") is not None}
 
     expected = [m["id"] for m in messages]
     missing = [i for i in expected if i not in by_id]
     if missing:
         raise ConformanceError(
-            f"{name}: no response for id(s) {missing}; "
-            f"received {sorted(by_id)}; extra={[r for r in responses if r.get('id') is None]}"
+            f"{name}: no response for id(s) {missing}; received {sorted(by_id)}; "
+            f"server exit code {returncode}\n--- server stderr ---\n{stderr[-2000:]}"
         )
     print(f"  received responses for ids {sorted(by_id)}")
     return by_id

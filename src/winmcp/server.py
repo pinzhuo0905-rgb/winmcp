@@ -25,6 +25,27 @@ SERVER_NAME = "winmcp"
 DEFAULT_TOOLS: tuple[str, ...] = ()
 
 
+def force_utf8_stdio() -> None:
+    """Pin stdout/stderr to UTF-8.
+
+    This matters more than it looks. On Windows the default encoding of a piped
+    stdout is the ANSI code page (cp936 on a Chinese install, cp1252 on a Western
+    one), not UTF-8. Tool errors and tool output routinely contain non-ASCII text —
+    a path with an accented character, a Chinese error message — and writing those
+    as cp936 produces bytes that any conforming MCP client, reading UTF-8, cannot
+    decode. The client then loses the entire response stream.
+
+    Pinning the encoding here makes the wire format independent of the host locale.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):  # pragma: no cover - stream not reconfigurable
+                pass
+
+
 def _content(result: Any) -> list[dict[str, Any]]:
     """Convert a ToolResult into MCP content blocks."""
     blocks: list[dict[str, Any]] = [{"type": "text", "text": result.text}]
@@ -122,6 +143,7 @@ def serve(
     log: bool = False,
 ) -> int:
     """Run the stdio loop until stdin closes."""
+    force_utf8_stdio()
     reg = _select_tools(build_registry(), list(include or []), list(exclude or []))
 
     if log:

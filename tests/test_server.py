@@ -125,6 +125,51 @@ def test_handle_returns_error_rather_than_raising() -> None:
         handle(_req(method), build_registry())
 
 
+def test_server_emits_utf8_regardless_of_locale() -> None:
+    """Regression: a non-ASCII tool error used to be written in the console code page.
+
+    Tool errors and paths are not ASCII. If the server writes them using the ANSI
+    code page, a client reading UTF-8 cannot decode the stream and loses every
+    response in the batch — not just the offending one.
+    """
+    import os
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = SRC
+    # Do not let the environment paper over the bug: with these set the interpreter
+    # would force UTF-8 for us and the test would pass even if the server did not.
+    env.pop("PYTHONIOENCODING", None)
+    env.pop("PYTHONUTF8", None)
+
+    payload = (
+        "\n".join(
+            json.dumps(m)
+            for m in [
+                _req("initialize", rid=1),
+                {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                # an unknown tool produces a non-ASCII error message
+                _req("tools/call", {"name": "NoSuchTool", "arguments": {}}, rid=2),
+                _req("ping", rid=3),
+            ]
+        )
+        + "\n"
+    ).encode("utf-8")
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "winmcp.cli", "serve"],
+        input=payload,  # bytes in, bytes out — we assert on the encoding itself
+        capture_output=True,
+        timeout=90,
+        cwd=str(ROOT),
+        env=env,
+    )
+    decoded = proc.stdout.decode("utf-8")  # raises UnicodeDecodeError on cp936 output
+    responses = [json.loads(line) for line in decoded.splitlines() if line.strip()]
+    by_id = {r.get("id"): r for r in responses}
+    assert by_id[2]["result"]["isError"] is True
+    assert by_id[3].get("result") == {}, "the batch must not be truncated by one bad message"
+
+
 # -- end-to-end over stdio --------------------------------------------------
 def _run_server(messages: list[dict], args: list[str] | None = None) -> list[dict]:
     import os
