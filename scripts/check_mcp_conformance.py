@@ -30,7 +30,7 @@ class ConformanceError(AssertionError):
 
 def _exchange(messages: list[dict], args: list[str] | None = None) -> list[dict]:
     payload = "\n".join(json.dumps(m) for m in messages) + "\n"
-    proc = subprocess.run(  # noqa: S603
+    proc = subprocess.run(
         [sys.executable, "-m", "winmcp.cli", "serve", *(args or [])],
         input=payload,
         capture_output=True,
