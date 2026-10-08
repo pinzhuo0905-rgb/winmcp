@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import json
 import sys
+import traceback
 from typing import Any
 
 from . import __version__
@@ -90,12 +91,15 @@ def handle(
         args = params.get("arguments") or {}
         try:
             result = reg.invoke(name, args)
-        except ToolError as exc:
+        except Exception as exc:
+            # ToolError is the expected failure. Anything else is a bug in a tool —
+            # still reported as a normal MCP error result so the client can continue.
+            detail = str(exc) if isinstance(exc, ToolError) else f"{type(exc).__name__}: {exc}"
             return {
                 "jsonrpc": "2.0",
                 "id": rid,
                 "result": {
-                    "content": [{"type": "text", "text": str(exc)}],
+                    "content": [{"type": "text", "text": detail}],
                     "isError": True,
                 },
             }
@@ -137,7 +141,26 @@ def serve(
             print("[winmcp] skipped a non-JSON line on stdin", file=sys.stderr, flush=True)
             continue
 
-        response = handle(request, reg, log=log)
+        # A single bad tool call must never take the server down. Anything that
+        # escapes handle() becomes a JSON-RPC error response instead of a crash —
+        # otherwise one failing tool ends the whole session.
+        try:
+            response = handle(request, reg, log=log)
+        except Exception as exc:
+            rid = request.get("id")
+            if log:
+                traceback.print_exc(file=sys.stderr)
+            response = {
+                "jsonrpc": "2.0",
+                "id": rid,
+                "error": {
+                    "code": -32603,
+                    "message": f"internal error: {type(exc).__name__}: {exc}",
+                },
+            }
+            if rid is None:
+                continue  # a notification has no reply
+
         if response is None:
             continue
         sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")

@@ -100,6 +100,31 @@ def test_tools_call_missing_params_is_handled() -> None:
     assert resp["result"]["isError"] is True
 
 
+def test_unexpected_tool_exception_does_not_escape() -> None:
+    """Regression: an exception that is not a ToolError used to kill the server.
+
+    One broken tool must not end the session — it should come back as a normal
+    error result so the client can keep going.
+    """
+    from winmcp.tools import Risk, Tool
+
+    reg = build_registry()
+
+    def boom(**_kwargs: object):
+        raise RuntimeError("something unexpected")
+
+    reg.add(Tool("Boom", "always fails", {"type": "object", "properties": {}}, boom, Risk.LOW))
+    resp = handle(_req("tools/call", {"name": "Boom", "arguments": {}}), reg)
+    assert resp["result"]["isError"] is True
+    assert "RuntimeError" in resp["result"]["content"][0]["text"]
+
+
+def test_handle_returns_error_rather_than_raising() -> None:
+    """``handle`` must never raise for a well-formed request."""
+    for method in ("tools/list", "ping", "initialize", "no/such/method"):
+        handle(_req(method), build_registry())
+
+
 # -- end-to-end over stdio --------------------------------------------------
 def _run_server(messages: list[dict], args: list[str] | None = None) -> list[dict]:
     import os
@@ -151,6 +176,21 @@ def test_stdio_exclude_tools_removes_from_the_surface() -> None:
     names = [t["name"] for t in responses[1]["result"]["tools"]]
     assert "FileSystem" not in names
     assert "Screenshot" in names
+
+
+def test_stdio_survives_a_failing_tool() -> None:
+    """A failing tool call must not end the session — the next request still works."""
+    responses = _run_server(
+        [
+            _req("initialize", rid=1),
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            _req("tools/call", {"name": "NoSuchTool", "arguments": {}}, rid=2),
+            _req("ping", rid=3),
+        ]
+    )
+    by_id = {r.get("id"): r for r in responses}
+    assert by_id[2]["result"]["isError"] is True
+    assert by_id[3].get("result") == {}, "server should still answer after a failed call"
 
 
 def test_stdio_survives_garbage_on_stdin() -> None:

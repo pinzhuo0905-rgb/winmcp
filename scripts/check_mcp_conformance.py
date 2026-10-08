@@ -30,24 +30,39 @@ class ConformanceError(AssertionError):
 
 def _exchange(messages: list[dict], args: list[str] | None = None) -> list[dict]:
     payload = "\n".join(json.dumps(m) for m in messages) + "\n"
-    proc = subprocess.run(
-        [sys.executable, "-m", "winmcp.cli", "serve", *(args or [])],
-        input=payload,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=90,
-        cwd=str(ROOT),
-    )
-    if proc.returncode != 0 and not proc.stdout.strip():
-        raise ConformanceError(f"server exited {proc.returncode}\nstderr:\n{proc.stderr}")
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "winmcp.cli", "serve", *(args or [])],
+            input=payload,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=90,
+            cwd=str(ROOT),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ConformanceError(
+            f"server did not exit within 90s; partial stdout:\n{(exc.stdout or '')[:2000]}"
+        ) from exc
+
+    stdout = proc.stdout or ""
+    stderr = proc.stderr or ""
+
+    if not stdout.strip():
+        raise ConformanceError(
+            f"server produced no output (exit {proc.returncode})\nstderr:\n{stderr[-2000:]}"
+        )
+
     out: list[dict] = []
-    for line in proc.stdout.splitlines():
+    for line in stdout.splitlines():
         if line.strip():
             try:
                 out.append(json.loads(line))
             except json.JSONDecodeError as exc:
-                raise ConformanceError(f"non-JSON on stdout: {line[:120]!r}") from exc
+                raise ConformanceError(
+                    f"non-JSON on stdout: {line[:160]!r}\nstderr:\n{stderr[-2000:]}"
+                ) from exc
     return out
 
 
